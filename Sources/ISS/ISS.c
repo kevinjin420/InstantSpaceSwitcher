@@ -52,6 +52,11 @@ extern CFArrayRef CGSCopyManagedDisplaySpaces(CGSConnectionID connection, CFStri
 extern CFStringRef CGSCopyActiveMenuBarDisplayIdentifier(CGSConnectionID connection) __attribute__((weak_import));
 extern CGSConnectionID CGSMainConnectionID(void) __attribute__((weak_import));
 extern CGSSpaceID CGSGetActiveSpace(CGSConnectionID connection) __attribute__((weak_import));
+extern void CGSMoveWindowsToManagedSpace(CGSConnectionID connection, CFArrayRef windows, CGSSpaceID space) __attribute__((weak_import));
+extern CGError CGSGetWindowOwner(CGSConnectionID cid, CGWindowID wid, CGSConnectionID *outOwnerCid) __attribute__((weak_import));
+
+// Private AX API — stable across macOS versions, underscore prefix is intentional.
+extern AXError _AXUIElementGetWindow(AXUIElementRef element, CGWindowID *outID) __attribute__((weak_import));
 
 static CFMachPortRef globalTap = NULL;
 static CFRunLoopSourceRef globalSource = NULL;
@@ -662,137 +667,141 @@ bool iss_switch_to_index(unsigned int targetIndex) {
     return !outOfBounds;
 }
 
-// Posts a synthetic Ctrl+Arrow keyboard event (down + up) which is the OS code
-// path that carries a held window across a space switch.
-static bool post_ctrl_arrow(ISSDirection direction) {
-    // kVK_LeftArrow = 0x7B, kVK_RightArrow = 0x7C (HIToolbox constants)
-    CGKeyCode keyCode = (direction == ISSDirectionLeft) ? 0x7B : 0x7C;
+// Returns the CGWindowID of the system-focused window.
+// Prefers _AXUIElementGetWindow (precise) and falls back to
+// CGWindowListCopyWindowInfo (front-to-back ordering) when unavailable.
+static CGWindowID get_focused_window_cgid(void) {
+    if (&_AXUIElementGetWindow != NULL) {
+        AXUIElementRef systemWide = AXUIElementCreateSystemWide();
+        if (systemWide) {
+            AXUIElementRef focusedApp = NULL;
+            AXError err = AXUIElementCopyAttributeValue(
+                systemWide, kAXFocusedApplicationAttribute, (CFTypeRef *)&focusedApp);
+            CFRelease(systemWide);
+            if (err == kAXErrorSuccess && focusedApp) {
+                AXUIElementRef focusedWindow = NULL;
+                err = AXUIElementCopyAttributeValue(
+                    focusedApp, kAXFocusedWindowAttribute, (CFTypeRef *)&focusedWindow);
+                CFRelease(focusedApp);
+                if (err == kAXErrorSuccess && focusedWindow) {
+                    CGWindowID windowID = 0;
+                    _AXUIElementGetWindow(focusedWindow, &windowID);
+                    CFRelease(focusedWindow);
+                    if (windowID != 0) return windowID;
+                }
+            }
+        }
+    }
 
-    CGEventRef down = CGEventCreateKeyboardEvent(NULL, keyCode, true);
-    if (!down) return false;
-    CGEventSetFlags(down, kCGEventFlagMaskControl);
-    CGEventPost(kCGHIDEventTap, down);
-    CFRelease(down);
+    // Fallback: first layer-0 window not owned by system processes.
+    CFArrayRef windowList = CGWindowListCopyWindowInfo(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+        kCGNullWindowID);
+    if (!windowList) return 0;
 
-    CGEventRef up = CGEventCreateKeyboardEvent(NULL, keyCode, false);
-    if (!up) return false;
-    CGEventSetFlags(up, kCGEventFlagMaskControl);
-    CGEventPost(kCGHIDEventTap, up);
-    CFRelease(up);
+    CGWindowID result = 0;
+    CFIndex count = CFArrayGetCount(windowList);
+    for (CFIndex i = 0; i < count && result == 0; i++) {
+        CFDictionaryRef info = (CFDictionaryRef)CFArrayGetValueAtIndex(windowList, i);
+        if (!info) continue;
 
-    return true;
+        CFNumberRef layerNum = (CFNumberRef)CFDictionaryGetValue(info, CFSTR("kCGWindowLayer"));
+        if (!layerNum) continue;
+        int layer = 0;
+        CFNumberGetValue(layerNum, kCFNumberIntType, &layer);
+        if (layer != 0) continue;
+
+        CFStringRef owner = (CFStringRef)CFDictionaryGetValue(info, CFSTR("kCGWindowOwnerName"));
+        if (!owner) continue;
+        if (CFEqual(owner, CFSTR("Dock")) || CFEqual(owner, CFSTR("WindowServer")) ||
+            CFEqual(owner, CFSTR("SystemUIServer")) || CFEqual(owner, CFSTR("Control Center"))) {
+            continue;
+        }
+
+        CFNumberRef widNum = (CFNumberRef)CFDictionaryGetValue(info, CFSTR("kCGWindowNumber"));
+        if (widNum) CFNumberGetValue(widNum, kCFNumberSInt32Type, &result);
+    }
+
+    CFRelease(windowList);
+    return result;
 }
 
-// Returns the title-bar grab point of the system-focused window, or false if
-// the focused window can't be located via Accessibility.
-static bool get_focused_window_grab_point(CGPoint *outPoint) {
-    if (!outPoint) return false;
+// Returns the space ID for the given zero-based space index across all displays.
+static CGSSpaceID get_space_id_for_index(CGSConnectionID connection, unsigned int targetIndex) {
+    CFArrayRef displays = CGSCopyManagedDisplaySpaces(connection, NULL);
+    if (!displays) return 0;
 
-    AXUIElementRef systemWide = AXUIElementCreateSystemWide();
-    if (!systemWide) return false;
+    CGSSpaceID result = 0;
+    unsigned int idx = 0;
+    CFIndex displayCount = CFArrayGetCount(displays);
 
-    AXUIElementRef focusedApp = NULL;
-    AXError err = AXUIElementCopyAttributeValue(
-        systemWide, kAXFocusedApplicationAttribute, (CFTypeRef *)&focusedApp);
-    CFRelease(systemWide);
-    if (err != kAXErrorSuccess || !focusedApp) return false;
+    for (CFIndex d = 0; d < displayCount && result == 0; d++) {
+        CFDictionaryRef displayDict = (CFDictionaryRef)CFArrayGetValueAtIndex(displays, d);
+        if (!displayDict || CFGetTypeID(displayDict) != CFDictionaryGetTypeID()) continue;
 
-    AXUIElementRef focusedWindow = NULL;
-    err = AXUIElementCopyAttributeValue(
-        focusedApp, kAXFocusedWindowAttribute, (CFTypeRef *)&focusedWindow);
-    CFRelease(focusedApp);
-    if (err != kAXErrorSuccess || !focusedWindow) return false;
+        CFArrayRef spaces = (CFArrayRef)CFDictionaryGetValue(displayDict, CFSTR("Spaces"));
+        if (!spaces || CFGetTypeID(spaces) != CFArrayGetTypeID()) continue;
 
-    AXValueRef posVal = NULL;
-    AXValueRef sizeVal = NULL;
-    err = AXUIElementCopyAttributeValue(focusedWindow, kAXPositionAttribute, (CFTypeRef *)&posVal);
-    if (err != kAXErrorSuccess || !posVal) { CFRelease(focusedWindow); return false; }
-    err = AXUIElementCopyAttributeValue(focusedWindow, kAXSizeAttribute, (CFTypeRef *)&sizeVal);
-    if (err != kAXErrorSuccess || !sizeVal) { CFRelease(posVal); CFRelease(focusedWindow); return false; }
+        CFIndex spaceCount = CFArrayGetCount(spaces);
+        for (CFIndex s = 0; s < spaceCount; s++, idx++) {
+            if (idx == targetIndex) {
+                CFDictionaryRef spaceDict = (CFDictionaryRef)CFArrayGetValueAtIndex(spaces, s);
+                if (spaceDict && CFGetTypeID(spaceDict) == CFDictionaryGetTypeID()) {
+                    CFNumberRef idNum = (CFNumberRef)CFDictionaryGetValue(spaceDict, CFSTR("id64"));
+                    if (idNum && CFGetTypeID(idNum) == CFNumberGetTypeID()) {
+                        CFNumberGetValue(idNum, kCFNumberSInt64Type, &result);
+                    }
+                }
+                break;
+            }
+        }
+    }
 
-    CGPoint pos = {0, 0};
-    CGSize size = {0, 0};
-    AXValueGetValue(posVal, kAXValueCGPointType, &pos);
-    AXValueGetValue(sizeVal, kAXValueCGSizeType, &size);
-    CFRelease(posVal);
-    CFRelease(sizeVal);
-    CFRelease(focusedWindow);
-
-    if (size.width <= 0 || size.height <= 0) return false;
-
-    // Title bar: midpoint along x, a few pixels down from the top. Avoids the
-    // traffic-light buttons on the left and any tab strip below.
-    outPoint->x = pos.x + size.width / 2.0;
-    outPoint->y = pos.y + 12;
-    return true;
+    CFRelease(displays);
+    return result;
 }
 
 bool iss_move_frontmost_window_to_index(unsigned int targetIndex) {
-    if (!cgs_symbols_available()) return false;
+    fprintf(stderr, "[ISS] move: called targetIndex=%u\n", targetIndex);
 
-    ISSSpaceInfo info;
-    if (!iss_get_space_info(&info)) return false;
-    if (targetIndex >= info.spaceCount) return false;
-    if (info.currentIndex == targetIndex) return true;
+    if (!cgs_symbols_available()) { fprintf(stderr, "[ISS] move: cgs symbols unavailable\n"); return false; }
+    if (&CGSMoveWindowsToManagedSpace == NULL) { fprintf(stderr, "[ISS] move: CGSMoveWindowsToManagedSpace missing\n"); return false; }
+    if (&CGSGetWindowOwner == NULL) { fprintf(stderr, "[ISS] move: CGSGetWindowOwner missing\n"); return false; }
 
-    CGPoint grabPoint;
-    if (!get_focused_window_grab_point(&grabPoint)) {
-        fprintf(stderr, "[ISS] move: no focused window via AX\n");
+    CGSConnectionID myConn = CGSMainConnectionID();
+    if (myConn == 0) { fprintf(stderr, "[ISS] move: no connection\n"); return false; }
+    fprintf(stderr, "[ISS] move: myConn=%d\n", myConn);
+
+    CGWindowID windowID = get_focused_window_cgid();
+    if (windowID == 0) {
+        fprintf(stderr, "[ISS] move: no focused window\n");
+        return false;
+    }
+    fprintf(stderr, "[ISS] move: windowID=%u\n", windowID);
+
+    CGSSpaceID targetSpaceID = get_space_id_for_index(myConn, targetIndex);
+    if (targetSpaceID == 0) {
+        fprintf(stderr, "[ISS] move: no space at index %u\n", targetIndex);
         return false;
     }
 
-    ISSDirection direction = targetIndex > info.currentIndex ? ISSDirectionRight : ISSDirectionLeft;
-    unsigned int steps = direction == ISSDirectionRight
-        ? targetIndex - info.currentIndex
-        : info.currentIndex - targetIndex;
-    double velocity = gestureSpeed * (double)steps;
-
-    // Save cursor so we can restore it after the synthetic drag.
-    CGPoint savedCursor = grabPoint;
-    CGEventRef stateEvent = CGEventCreate(NULL);
-    if (stateEvent) {
-        savedCursor = CGEventGetLocation(stateEvent);
-        CFRelease(stateEvent);
+    CGSConnectionID ownerConn = 0;
+    if (CGSGetWindowOwner(myConn, windowID, &ownerConn) != kCGErrorSuccess || ownerConn == 0) {
+        fprintf(stderr, "[ISS] move: CGSGetWindowOwner failed, falling back to own conn\n");
+        ownerConn = myConn;
     }
 
-    // Grab the window. Clear modifier flags so the hotkey's modifiers don't
-    // turn this into a modified click (e.g. cmd+click, ctrl+click).
-    CGEventRef down = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDown,
-                                              grabPoint, kCGMouseButtonLeft);
-    if (!down) return false;
-    CGEventSetFlags(down, 0);
-    CGEventPost(kCGHIDEventTap, down);
-    CFRelease(down);
+    fprintf(stderr, "[ISS] move: wid=%u ownerConn=%d targetSpace=%llu\n",
+            windowID, ownerConn, (unsigned long long)targetSpaceID);
 
-    // Let WindowServer register the grab before we start switching.
-    usleep(5000);
+    CFNumberRef windowIDNum = CFNumberCreate(NULL, kCFNumberSInt32Type, &windowID);
+    if (!windowIDNum) return false;
+    CFArrayRef windows = CFArrayCreate(NULL, (const void **)&windowIDNum, 1, &kCFTypeArrayCallBacks);
+    CFRelease(windowIDNum);
+    if (!windows) return false;
 
-    for (unsigned int i = 0; i < steps; i++) {
-        // Ctrl+Arrow is the OS code path that carries a held window across a
-        // space switch. Post it first to attach the window to the transition.
-        post_ctrl_arrow(direction);
-        // Brief gap so the keyboard event initiates the carry, then punch
-        // through with a high-velocity dock-swipe to try to kill the animation.
-        usleep(8000);
-        iss_post_dock_swipe(kCGSGesturePhaseBegan,   direction, velocity);
-        iss_post_dock_swipe(kCGSGesturePhaseChanged, direction, velocity);
-        iss_post_dock_swipe(kCGSGesturePhaseEnded,   direction, velocity);
-        // Gap between steps for multi-space moves.
-        if (i + 1 < steps) usleep(16000);
-    }
-
-    // Drop the window on the new space.
-    CGEventRef up = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp,
-                                            grabPoint, kCGMouseButtonLeft);
-    if (up) {
-        CGEventSetFlags(up, 0);
-        CGEventPost(kCGHIDEventTap, up);
-        CFRelease(up);
-    }
-
-    CGWarpMouseCursorPosition(savedCursor);
-    set_prediction(info.displayID, targetIndex);
-    if (switchCallback) { switchCallback(targetIndex); }
+    CGSMoveWindowsToManagedSpace(ownerConn, windows, targetSpaceID);
+    CFRelease(windows);
     return true;
 }
 
