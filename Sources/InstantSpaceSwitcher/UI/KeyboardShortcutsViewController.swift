@@ -231,6 +231,15 @@ extension KeyboardShortcutsViewController: NSTableViewDelegate {
     case .space9: defaultCombination = .defaultForSpace(9)
     case .space10: defaultCombination = .defaultForSpace(10)
     case .lastSpace: defaultCombination = .defaultLastSpace
+    case .moveToSpace1: defaultCombination = .defaultForMoveToSpace(1)
+    case .moveToSpace2: defaultCombination = .defaultForMoveToSpace(2)
+    case .moveToSpace3: defaultCombination = .defaultForMoveToSpace(3)
+    case .moveToSpace4: defaultCombination = .defaultForMoveToSpace(4)
+    case .moveToSpace5: defaultCombination = .defaultForMoveToSpace(5)
+    case .moveToSpace6: defaultCombination = .defaultForMoveToSpace(6)
+    case .moveToSpace7: defaultCombination = .defaultForMoveToSpace(7)
+    case .moveToSpace8: defaultCombination = .defaultForMoveToSpace(8)
+    case .moveToSpace9: defaultCombination = .defaultForMoveToSpace(9)
     }
     store.update(defaultCombination, for: identifier)
   }

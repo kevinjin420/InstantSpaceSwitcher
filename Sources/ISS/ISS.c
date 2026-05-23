@@ -52,6 +52,7 @@ extern CFArrayRef CGSCopyManagedDisplaySpaces(CGSConnectionID connection, CFStri
 extern CFStringRef CGSCopyActiveMenuBarDisplayIdentifier(CGSConnectionID connection) __attribute__((weak_import));
 extern CGSConnectionID CGSMainConnectionID(void) __attribute__((weak_import));
 extern CGSSpaceID CGSGetActiveSpace(CGSConnectionID connection) __attribute__((weak_import));
+extern void CGSMoveWindowsToManagedSpace(CGSConnectionID connection, CFArrayRef windows, CGSSpaceID space) __attribute__((weak_import));
 
 static CFMachPortRef globalTap = NULL;
 static CFRunLoopSourceRef globalSource = NULL;
@@ -660,6 +661,106 @@ bool iss_switch_to_index(unsigned int targetIndex) {
     set_prediction(info.displayID, targetIndex);
     if (switchCallback) { switchCallback(targetIndex); }
     return !outOfBounds;
+}
+
+static CGSSpaceID get_space_id_for_index(CGSConnectionID connection, unsigned int targetIndex) {
+    CFArrayRef displays = CGSCopyManagedDisplaySpaces(connection, NULL);
+    if (!displays) return 0;
+
+    CGSSpaceID result = 0;
+    unsigned int idx = 0;
+    CFIndex displayCount = CFArrayGetCount(displays);
+
+    for (CFIndex d = 0; d < displayCount; d++) {
+        CFDictionaryRef displayDict = (CFDictionaryRef)CFArrayGetValueAtIndex(displays, d);
+        if (!displayDict || CFGetTypeID(displayDict) != CFDictionaryGetTypeID()) continue;
+
+        CFArrayRef spaces = (CFArrayRef)CFDictionaryGetValue(displayDict, CFSTR("Spaces"));
+        if (!spaces || CFGetTypeID(spaces) != CFArrayGetTypeID()) continue;
+
+        CFIndex spaceCount = CFArrayGetCount(spaces);
+        for (CFIndex s = 0; s < spaceCount; s++) {
+            if (idx == targetIndex) {
+                CFDictionaryRef spaceDict = (CFDictionaryRef)CFArrayGetValueAtIndex(spaces, s);
+                if (spaceDict && CFGetTypeID(spaceDict) == CFDictionaryGetTypeID()) {
+                    CFNumberRef idNum = (CFNumberRef)CFDictionaryGetValue(spaceDict, CFSTR("id64"));
+                    if (idNum && CFGetTypeID(idNum) == CFNumberGetTypeID()) {
+                        CFNumberGetValue(idNum, kCFNumberSInt64Type, &result);
+                    }
+                }
+                goto done;
+            }
+            idx++;
+        }
+    }
+done:
+    CFRelease(displays);
+    return result;
+}
+
+static uint32_t get_frontmost_window_id(void) {
+    CFArrayRef windowList = CGWindowListCopyWindowInfo(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+        kCGNullWindowID);
+    if (!windowList) return 0;
+
+    uint32_t result = 0;
+    CFIndex count = CFArrayGetCount(windowList);
+    for (CFIndex i = 0; i < count; i++) {
+        CFDictionaryRef info = (CFDictionaryRef)CFArrayGetValueAtIndex(windowList, i);
+        if (!info) continue;
+
+        CFNumberRef layerNum = (CFNumberRef)CFDictionaryGetValue(info, CFSTR("kCGWindowLayer"));
+        if (!layerNum) continue;
+        int layer = 0;
+        CFNumberGetValue(layerNum, kCFNumberIntType, &layer);
+        if (layer != 0) continue;
+
+        CFStringRef owner = (CFStringRef)CFDictionaryGetValue(info, CFSTR("kCGWindowOwnerName"));
+        if (!owner) continue;
+        if (CFEqual(owner, CFSTR("Dock")) || CFEqual(owner, CFSTR("WindowServer")) ||
+            CFEqual(owner, CFSTR("SystemUIServer")) || CFEqual(owner, CFSTR("Control Center"))) {
+            continue;
+        }
+
+        CFNumberRef windowIDNum = (CFNumberRef)CFDictionaryGetValue(info, CFSTR("kCGWindowNumber"));
+        if (windowIDNum) {
+            uint32_t windowID = 0;
+            CFNumberGetValue(windowIDNum, kCFNumberIntType, &windowID);
+            if (windowID != 0) {
+                result = windowID;
+                break;
+            }
+        }
+    }
+
+    CFRelease(windowList);
+    return result;
+}
+
+bool iss_move_frontmost_window_to_index(unsigned int targetIndex) {
+    if (&CGSMoveWindowsToManagedSpace == NULL) return false;
+    if (!cgs_symbols_available()) return false;
+
+    CGSConnectionID connection = CGSMainConnectionID();
+    if (connection == 0) return false;
+
+    uint32_t windowID = get_frontmost_window_id();
+    if (windowID == 0) return false;
+
+    CGSSpaceID spaceID = get_space_id_for_index(connection, targetIndex);
+    if (spaceID == 0) return false;
+
+    CFNumberRef windowIDNum = CFNumberCreate(NULL, kCFNumberSInt32Type, &windowID);
+    if (!windowIDNum) return false;
+
+    CFArrayRef windows = CFArrayCreate(NULL, (const void **)&windowIDNum, 1, &kCFTypeArrayCallBacks);
+    CFRelease(windowIDNum);
+    if (!windows) return false;
+
+    CGSMoveWindowsToManagedSpace(connection, windows, spaceID);
+    CFRelease(windows);
+    return true;
 }
 
 void iss_set_swipe_override(bool enabled) {

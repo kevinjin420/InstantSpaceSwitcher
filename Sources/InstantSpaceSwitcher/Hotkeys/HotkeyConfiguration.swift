@@ -47,6 +47,20 @@ struct HotkeyCombination: Codable, Equatable {
     keyEquivalent: "-" 
   )
 
+  static var moveModifierMask: UInt32 {
+    UInt32(optionKey) | UInt32(shiftKey)
+  }
+
+  static func defaultForMoveToSpace(_ number: Int) -> HotkeyCombination {
+    let base = defaultForSpace(number)
+    return HotkeyCombination(
+      keyCode: base.keyCode,
+      modifiers: moveModifierMask,
+      displayKey: base.displayKey,
+      keyEquivalent: base.keyEquivalent
+    )
+  }
+
   static func defaultForSpace(_ number: Int) -> HotkeyCombination {
     let keyCode: UInt32
     let displayKey: String
@@ -244,7 +258,9 @@ enum HotkeyIdentifier: String, CaseIterable {
   case space1, space2, space3, space4, space5
   case space6, space7, space8, space9, space10
   case lastSpace
-  
+  case moveToSpace1, moveToSpace2, moveToSpace3, moveToSpace4, moveToSpace5
+  case moveToSpace6, moveToSpace7, moveToSpace8, moveToSpace9
+
   var displayName: String {
     switch self {
     case .left: return "Switch to space on the left"
@@ -260,6 +276,15 @@ enum HotkeyIdentifier: String, CaseIterable {
     case .space9: return "Switch to space 9"
     case .space10: return "Switch to space 10"
     case .lastSpace: return "Switch to last used space"
+    case .moveToSpace1: return "Move window to space 1"
+    case .moveToSpace2: return "Move window to space 2"
+    case .moveToSpace3: return "Move window to space 3"
+    case .moveToSpace4: return "Move window to space 4"
+    case .moveToSpace5: return "Move window to space 5"
+    case .moveToSpace6: return "Move window to space 6"
+    case .moveToSpace7: return "Move window to space 7"
+    case .moveToSpace8: return "Move window to space 8"
+    case .moveToSpace9: return "Move window to space 9"
     }
   }
 }
@@ -280,6 +305,15 @@ final class HotkeyStore: ObservableObject {
   @Published private(set) var space9Hotkey: HotkeyCombination
   @Published private(set) var space10Hotkey: HotkeyCombination
   @Published private(set) var spaceLastSpaceHotkey: HotkeyCombination
+  @Published private(set) var moveToSpace1Hotkey: HotkeyCombination
+  @Published private(set) var moveToSpace2Hotkey: HotkeyCombination
+  @Published private(set) var moveToSpace3Hotkey: HotkeyCombination
+  @Published private(set) var moveToSpace4Hotkey: HotkeyCombination
+  @Published private(set) var moveToSpace5Hotkey: HotkeyCombination
+  @Published private(set) var moveToSpace6Hotkey: HotkeyCombination
+  @Published private(set) var moveToSpace7Hotkey: HotkeyCombination
+  @Published private(set) var moveToSpace8Hotkey: HotkeyCombination
+  @Published private(set) var moveToSpace9Hotkey: HotkeyCombination
   @Published private(set) var enabledStates: [HotkeyIdentifier: Bool] = [:]
 
   private let defaults: UserDefaults
@@ -299,6 +333,15 @@ final class HotkeyStore: ObservableObject {
     space9Hotkey = defaults.hotkey(forKey: DefaultsKey.space9.rawValue) ?? .defaultForSpace(9)
     space10Hotkey = defaults.hotkey(forKey: DefaultsKey.space10.rawValue) ?? .defaultForSpace(10)
     spaceLastSpaceHotkey = defaults.hotkey(forKey: DefaultsKey.lastSpace.rawValue) ?? .defaultLastSpace
+    moveToSpace1Hotkey = defaults.hotkey(forKey: DefaultsKey.moveToSpace1.rawValue) ?? .defaultForMoveToSpace(1)
+    moveToSpace2Hotkey = defaults.hotkey(forKey: DefaultsKey.moveToSpace2.rawValue) ?? .defaultForMoveToSpace(2)
+    moveToSpace3Hotkey = defaults.hotkey(forKey: DefaultsKey.moveToSpace3.rawValue) ?? .defaultForMoveToSpace(3)
+    moveToSpace4Hotkey = defaults.hotkey(forKey: DefaultsKey.moveToSpace4.rawValue) ?? .defaultForMoveToSpace(4)
+    moveToSpace5Hotkey = defaults.hotkey(forKey: DefaultsKey.moveToSpace5.rawValue) ?? .defaultForMoveToSpace(5)
+    moveToSpace6Hotkey = defaults.hotkey(forKey: DefaultsKey.moveToSpace6.rawValue) ?? .defaultForMoveToSpace(6)
+    moveToSpace7Hotkey = defaults.hotkey(forKey: DefaultsKey.moveToSpace7.rawValue) ?? .defaultForMoveToSpace(7)
+    moveToSpace8Hotkey = defaults.hotkey(forKey: DefaultsKey.moveToSpace8.rawValue) ?? .defaultForMoveToSpace(8)
+    moveToSpace9Hotkey = defaults.hotkey(forKey: DefaultsKey.moveToSpace9.rawValue) ?? .defaultForMoveToSpace(9)
 
     for identifier in HotkeyIdentifier.allCases {
       let key = "enabled.\(identifier.rawValue)"
@@ -360,6 +403,42 @@ final class HotkeyStore: ObservableObject {
       guard combination != spaceLastSpaceHotkey else { return }
       spaceLastSpaceHotkey = combination
       defaults.setHotkey(combination, forKey: DefaultsKey.lastSpace.rawValue)
+    case .moveToSpace1:
+      guard combination != moveToSpace1Hotkey else { return }
+      moveToSpace1Hotkey = combination
+      defaults.setHotkey(combination, forKey: DefaultsKey.moveToSpace1.rawValue)
+    case .moveToSpace2:
+      guard combination != moveToSpace2Hotkey else { return }
+      moveToSpace2Hotkey = combination
+      defaults.setHotkey(combination, forKey: DefaultsKey.moveToSpace2.rawValue)
+    case .moveToSpace3:
+      guard combination != moveToSpace3Hotkey else { return }
+      moveToSpace3Hotkey = combination
+      defaults.setHotkey(combination, forKey: DefaultsKey.moveToSpace3.rawValue)
+    case .moveToSpace4:
+      guard combination != moveToSpace4Hotkey else { return }
+      moveToSpace4Hotkey = combination
+      defaults.setHotkey(combination, forKey: DefaultsKey.moveToSpace4.rawValue)
+    case .moveToSpace5:
+      guard combination != moveToSpace5Hotkey else { return }
+      moveToSpace5Hotkey = combination
+      defaults.setHotkey(combination, forKey: DefaultsKey.moveToSpace5.rawValue)
+    case .moveToSpace6:
+      guard combination != moveToSpace6Hotkey else { return }
+      moveToSpace6Hotkey = combination
+      defaults.setHotkey(combination, forKey: DefaultsKey.moveToSpace6.rawValue)
+    case .moveToSpace7:
+      guard combination != moveToSpace7Hotkey else { return }
+      moveToSpace7Hotkey = combination
+      defaults.setHotkey(combination, forKey: DefaultsKey.moveToSpace7.rawValue)
+    case .moveToSpace8:
+      guard combination != moveToSpace8Hotkey else { return }
+      moveToSpace8Hotkey = combination
+      defaults.setHotkey(combination, forKey: DefaultsKey.moveToSpace8.rawValue)
+    case .moveToSpace9:
+      guard combination != moveToSpace9Hotkey else { return }
+      moveToSpace9Hotkey = combination
+      defaults.setHotkey(combination, forKey: DefaultsKey.moveToSpace9.rawValue)
     }
   }
 
@@ -391,6 +470,24 @@ final class HotkeyStore: ObservableObject {
     defaults.setHotkey(space9Hotkey, forKey: DefaultsKey.space9.rawValue)
     defaults.setHotkey(space10Hotkey, forKey: DefaultsKey.space10.rawValue)
     defaults.setHotkey(spaceLastSpaceHotkey, forKey: DefaultsKey.lastSpace.rawValue)
+    moveToSpace1Hotkey = .defaultForMoveToSpace(1)
+    moveToSpace2Hotkey = .defaultForMoveToSpace(2)
+    moveToSpace3Hotkey = .defaultForMoveToSpace(3)
+    moveToSpace4Hotkey = .defaultForMoveToSpace(4)
+    moveToSpace5Hotkey = .defaultForMoveToSpace(5)
+    moveToSpace6Hotkey = .defaultForMoveToSpace(6)
+    moveToSpace7Hotkey = .defaultForMoveToSpace(7)
+    moveToSpace8Hotkey = .defaultForMoveToSpace(8)
+    moveToSpace9Hotkey = .defaultForMoveToSpace(9)
+    defaults.setHotkey(moveToSpace1Hotkey, forKey: DefaultsKey.moveToSpace1.rawValue)
+    defaults.setHotkey(moveToSpace2Hotkey, forKey: DefaultsKey.moveToSpace2.rawValue)
+    defaults.setHotkey(moveToSpace3Hotkey, forKey: DefaultsKey.moveToSpace3.rawValue)
+    defaults.setHotkey(moveToSpace4Hotkey, forKey: DefaultsKey.moveToSpace4.rawValue)
+    defaults.setHotkey(moveToSpace5Hotkey, forKey: DefaultsKey.moveToSpace5.rawValue)
+    defaults.setHotkey(moveToSpace6Hotkey, forKey: DefaultsKey.moveToSpace6.rawValue)
+    defaults.setHotkey(moveToSpace7Hotkey, forKey: DefaultsKey.moveToSpace7.rawValue)
+    defaults.setHotkey(moveToSpace8Hotkey, forKey: DefaultsKey.moveToSpace8.rawValue)
+    defaults.setHotkey(moveToSpace9Hotkey, forKey: DefaultsKey.moveToSpace9.rawValue)
   }
 
   func combination(for identifier: HotkeyIdentifier) -> HotkeyCombination {
@@ -408,6 +505,15 @@ final class HotkeyStore: ObservableObject {
     case .space9: return space9Hotkey
     case .space10: return space10Hotkey
     case .lastSpace: return spaceLastSpaceHotkey
+    case .moveToSpace1: return moveToSpace1Hotkey
+    case .moveToSpace2: return moveToSpace2Hotkey
+    case .moveToSpace3: return moveToSpace3Hotkey
+    case .moveToSpace4: return moveToSpace4Hotkey
+    case .moveToSpace5: return moveToSpace5Hotkey
+    case .moveToSpace6: return moveToSpace6Hotkey
+    case .moveToSpace7: return moveToSpace7Hotkey
+    case .moveToSpace8: return moveToSpace8Hotkey
+    case .moveToSpace9: return moveToSpace9Hotkey
     }
   }
 
@@ -435,6 +541,15 @@ final class HotkeyStore: ObservableObject {
     case space9 = "hotkey.space9"
     case space10 = "hotkey.space10"
     case lastSpace = "hotkey.lastSpace"
+    case moveToSpace1 = "hotkey.moveToSpace1"
+    case moveToSpace2 = "hotkey.moveToSpace2"
+    case moveToSpace3 = "hotkey.moveToSpace3"
+    case moveToSpace4 = "hotkey.moveToSpace4"
+    case moveToSpace5 = "hotkey.moveToSpace5"
+    case moveToSpace6 = "hotkey.moveToSpace6"
+    case moveToSpace7 = "hotkey.moveToSpace7"
+    case moveToSpace8 = "hotkey.moveToSpace8"
+    case moveToSpace9 = "hotkey.moveToSpace9"
   }
 }
 

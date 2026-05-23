@@ -283,6 +283,24 @@ final class HotkeyPreferencesView: NSView {
       store.update(.defaultForSpace(10), for: .space10)
     case .lastSpace:
       store.update(.defaultLastSpace, for: .lastSpace)
+    case .moveToSpace1:
+      store.update(.defaultForMoveToSpace(1), for: .moveToSpace1)
+    case .moveToSpace2:
+      store.update(.defaultForMoveToSpace(2), for: .moveToSpace2)
+    case .moveToSpace3:
+      store.update(.defaultForMoveToSpace(3), for: .moveToSpace3)
+    case .moveToSpace4:
+      store.update(.defaultForMoveToSpace(4), for: .moveToSpace4)
+    case .moveToSpace5:
+      store.update(.defaultForMoveToSpace(5), for: .moveToSpace5)
+    case .moveToSpace6:
+      store.update(.defaultForMoveToSpace(6), for: .moveToSpace6)
+    case .moveToSpace7:
+      store.update(.defaultForMoveToSpace(7), for: .moveToSpace7)
+    case .moveToSpace8:
+      store.update(.defaultForMoveToSpace(8), for: .moveToSpace8)
+    case .moveToSpace9:
+      store.update(.defaultForMoveToSpace(9), for: .moveToSpace9)
     }
     setStatus("Reset \(identifier.displayName) shortcut.", color: .labelColor)
   }

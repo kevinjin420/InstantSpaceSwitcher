@@ -118,4 +118,11 @@ void iss_set_overlay_detection_enabled(bool enabled);
  */
 void iss_set_gesture_speed(double speed);
 
+/**
+ * @brief Moves the frontmost window to the space at the given zero-based index.
+ * @param targetIndex Zero-based index of the target space.
+ * @return true on success, false on failure.
+ */
+bool iss_move_frontmost_window_to_index(unsigned int targetIndex);
+
 #endif /* _ISS_H */

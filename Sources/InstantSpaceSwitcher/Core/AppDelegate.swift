@@ -218,6 +218,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     hotkeyStore.$spaceLastSpaceHotkey.receive(on: RunLoop.main).sink { [weak self] in
       self?.registerHotkey(for: .lastSpace, combination: $0)
     }.store(in: &cancellables)
+    hotkeyStore.$moveToSpace1Hotkey.receive(on: RunLoop.main).sink { [weak self] in
+      self?.registerHotkey(for: .moveToSpace1, combination: $0)
+    }.store(in: &cancellables)
+    hotkeyStore.$moveToSpace2Hotkey.receive(on: RunLoop.main).sink { [weak self] in
+      self?.registerHotkey(for: .moveToSpace2, combination: $0)
+    }.store(in: &cancellables)
+    hotkeyStore.$moveToSpace3Hotkey.receive(on: RunLoop.main).sink { [weak self] in
+      self?.registerHotkey(for: .moveToSpace3, combination: $0)
+    }.store(in: &cancellables)
+    hotkeyStore.$moveToSpace4Hotkey.receive(on: RunLoop.main).sink { [weak self] in
+      self?.registerHotkey(for: .moveToSpace4, combination: $0)
+    }.store(in: &cancellables)
+    hotkeyStore.$moveToSpace5Hotkey.receive(on: RunLoop.main).sink { [weak self] in
+      self?.registerHotkey(for: .moveToSpace5, combination: $0)
+    }.store(in: &cancellables)
+    hotkeyStore.$moveToSpace6Hotkey.receive(on: RunLoop.main).sink { [weak self] in
+      self?.registerHotkey(for: .moveToSpace6, combination: $0)
+    }.store(in: &cancellables)
+    hotkeyStore.$moveToSpace7Hotkey.receive(on: RunLoop.main).sink { [weak self] in
+      self?.registerHotkey(for: .moveToSpace7, combination: $0)
+    }.store(in: &cancellables)
+    hotkeyStore.$moveToSpace8Hotkey.receive(on: RunLoop.main).sink { [weak self] in
+      self?.registerHotkey(for: .moveToSpace8, combination: $0)
+    }.store(in: &cancellables)
+    hotkeyStore.$moveToSpace9Hotkey.receive(on: RunLoop.main).sink { [weak self] in
+      self?.registerHotkey(for: .moveToSpace9, combination: $0)
+    }.store(in: &cancellables)
 
     hotkeyStore.$enabledStates.receive(on: RunLoop.main).sink { [weak self] _ in
       guard let self = self else { return }
@@ -273,6 +300,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.performSpaceSwitchToIndex(9)
       case .lastSpace:
         self.performSpaceLastSpace()
+      case .moveToSpace1:
+        self.performMoveWindowToIndex(0)
+      case .moveToSpace2:
+        self.performMoveWindowToIndex(1)
+      case .moveToSpace3:
+        self.performMoveWindowToIndex(2)
+      case .moveToSpace4:
+        self.performMoveWindowToIndex(3)
+      case .moveToSpace5:
+        self.performMoveWindowToIndex(4)
+      case .moveToSpace6:
+        self.performMoveWindowToIndex(5)
+      case .moveToSpace7:
+        self.performMoveWindowToIndex(6)
+      case .moveToSpace8:
+        self.performMoveWindowToIndex(7)
+      case .moveToSpace9:
+        self.performMoveWindowToIndex(8)
       }
     }
   }
@@ -300,6 +345,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     performSpaceSwitchToIndex(lastSpaceIndex)
+  }
+
+  private func performMoveWindowToIndex(_ index: UInt32) {
+    if !iss_move_frontmost_window_to_index(index) {
+      NSSound.beep()
+    }
   }
 
   private func refreshSpaceInfo() {
