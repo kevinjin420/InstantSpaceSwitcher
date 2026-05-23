@@ -662,6 +662,27 @@ bool iss_switch_to_index(unsigned int targetIndex) {
     return !outOfBounds;
 }
 
+// Posts a synthetic Ctrl+Arrow keyboard event (down + up) which is the OS code
+// path that carries a held window across a space switch.
+static bool post_ctrl_arrow(ISSDirection direction) {
+    // kVK_LeftArrow = 0x7B, kVK_RightArrow = 0x7C (HIToolbox constants)
+    CGKeyCode keyCode = (direction == ISSDirectionLeft) ? 0x7B : 0x7C;
+
+    CGEventRef down = CGEventCreateKeyboardEvent(NULL, keyCode, true);
+    if (!down) return false;
+    CGEventSetFlags(down, kCGEventFlagMaskControl);
+    CGEventPost(kCGHIDEventTap, down);
+    CFRelease(down);
+
+    CGEventRef up = CGEventCreateKeyboardEvent(NULL, keyCode, false);
+    if (!up) return false;
+    CGEventSetFlags(up, kCGEventFlagMaskControl);
+    CGEventPost(kCGHIDEventTap, up);
+    CFRelease(up);
+
+    return true;
+}
+
 // Returns the title-bar grab point of the system-focused window, or false if
 // the focused window can't be located via Accessibility.
 static bool get_focused_window_grab_point(CGPoint *outPoint) {
@@ -720,7 +741,13 @@ bool iss_move_frontmost_window_to_index(unsigned int targetIndex) {
         return false;
     }
 
-    // Save the user's cursor so we can put it back after the synthetic drag.
+    ISSDirection direction = targetIndex > info.currentIndex ? ISSDirectionRight : ISSDirectionLeft;
+    unsigned int steps = direction == ISSDirectionRight
+        ? targetIndex - info.currentIndex
+        : info.currentIndex - targetIndex;
+    double velocity = gestureSpeed * (double)steps;
+
+    // Save cursor so we can restore it after the synthetic drag.
     CGPoint savedCursor = grabPoint;
     CGEventRef stateEvent = CGEventCreate(NULL);
     if (stateEvent) {
@@ -728,8 +755,8 @@ bool iss_move_frontmost_window_to_index(unsigned int targetIndex) {
         CFRelease(stateEvent);
     }
 
-    // Mouse-down on the title bar. Clear modifier flags so the hotkey's
-    // modifiers (cmd/opt/shift/ctrl) don't turn this into a modified click.
+    // Grab the window. Clear modifier flags so the hotkey's modifiers don't
+    // turn this into a modified click (e.g. cmd+click, ctrl+click).
     CGEventRef down = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDown,
                                               grabPoint, kCGMouseButtonLeft);
     if (!down) return false;
@@ -737,13 +764,24 @@ bool iss_move_frontmost_window_to_index(unsigned int targetIndex) {
     CGEventPost(kCGHIDEventTap, down);
     CFRelease(down);
 
-    // Small pause so WindowServer registers the grab before we swipe.
+    // Let WindowServer register the grab before we start switching.
     usleep(5000);
 
-    // Existing instant space switch. The held window should ride along.
-    bool switched = iss_switch_to_index(targetIndex);
+    for (unsigned int i = 0; i < steps; i++) {
+        // Ctrl+Arrow is the OS code path that carries a held window across a
+        // space switch. Post it first to attach the window to the transition.
+        post_ctrl_arrow(direction);
+        // Brief gap so the keyboard event initiates the carry, then punch
+        // through with a high-velocity dock-swipe to try to kill the animation.
+        usleep(8000);
+        iss_post_dock_swipe(kCGSGesturePhaseBegan,   direction, velocity);
+        iss_post_dock_swipe(kCGSGesturePhaseChanged, direction, velocity);
+        iss_post_dock_swipe(kCGSGesturePhaseEnded,   direction, velocity);
+        // Gap between steps for multi-space moves.
+        if (i + 1 < steps) usleep(16000);
+    }
 
-    // Mouse-up to drop the window on whatever space we ended up on.
+    // Drop the window on the new space.
     CGEventRef up = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp,
                                             grabPoint, kCGMouseButtonLeft);
     if (up) {
@@ -753,7 +791,9 @@ bool iss_move_frontmost_window_to_index(unsigned int targetIndex) {
     }
 
     CGWarpMouseCursorPosition(savedCursor);
-    return switched;
+    set_prediction(info.displayID, targetIndex);
+    if (switchCallback) { switchCallback(targetIndex); }
+    return true;
 }
 
 void iss_set_swipe_override(bool enabled) {
