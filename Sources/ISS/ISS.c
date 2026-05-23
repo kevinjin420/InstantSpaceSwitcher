@@ -52,7 +52,6 @@ extern CFArrayRef CGSCopyManagedDisplaySpaces(CGSConnectionID connection, CFStri
 extern CFStringRef CGSCopyActiveMenuBarDisplayIdentifier(CGSConnectionID connection) __attribute__((weak_import));
 extern CGSConnectionID CGSMainConnectionID(void) __attribute__((weak_import));
 extern CGSSpaceID CGSGetActiveSpace(CGSConnectionID connection) __attribute__((weak_import));
-extern void CGSMoveWindowsToManagedSpace(CGSConnectionID connection, CFArrayRef windows, CGSSpaceID space) __attribute__((weak_import));
 
 static CFMachPortRef globalTap = NULL;
 static CFRunLoopSourceRef globalSource = NULL;
@@ -663,104 +662,98 @@ bool iss_switch_to_index(unsigned int targetIndex) {
     return !outOfBounds;
 }
 
-static CGSSpaceID get_space_id_for_index(CGSConnectionID connection, unsigned int targetIndex) {
-    CFArrayRef displays = CGSCopyManagedDisplaySpaces(connection, NULL);
-    if (!displays) return 0;
+// Returns the title-bar grab point of the system-focused window, or false if
+// the focused window can't be located via Accessibility.
+static bool get_focused_window_grab_point(CGPoint *outPoint) {
+    if (!outPoint) return false;
 
-    CGSSpaceID result = 0;
-    unsigned int idx = 0;
-    CFIndex displayCount = CFArrayGetCount(displays);
+    AXUIElementRef systemWide = AXUIElementCreateSystemWide();
+    if (!systemWide) return false;
 
-    for (CFIndex d = 0; d < displayCount; d++) {
-        CFDictionaryRef displayDict = (CFDictionaryRef)CFArrayGetValueAtIndex(displays, d);
-        if (!displayDict || CFGetTypeID(displayDict) != CFDictionaryGetTypeID()) continue;
+    AXUIElementRef focusedApp = NULL;
+    AXError err = AXUIElementCopyAttributeValue(
+        systemWide, kAXFocusedApplicationAttribute, (CFTypeRef *)&focusedApp);
+    CFRelease(systemWide);
+    if (err != kAXErrorSuccess || !focusedApp) return false;
 
-        CFArrayRef spaces = (CFArrayRef)CFDictionaryGetValue(displayDict, CFSTR("Spaces"));
-        if (!spaces || CFGetTypeID(spaces) != CFArrayGetTypeID()) continue;
+    AXUIElementRef focusedWindow = NULL;
+    err = AXUIElementCopyAttributeValue(
+        focusedApp, kAXFocusedWindowAttribute, (CFTypeRef *)&focusedWindow);
+    CFRelease(focusedApp);
+    if (err != kAXErrorSuccess || !focusedWindow) return false;
 
-        CFIndex spaceCount = CFArrayGetCount(spaces);
-        for (CFIndex s = 0; s < spaceCount; s++) {
-            if (idx == targetIndex) {
-                CFDictionaryRef spaceDict = (CFDictionaryRef)CFArrayGetValueAtIndex(spaces, s);
-                if (spaceDict && CFGetTypeID(spaceDict) == CFDictionaryGetTypeID()) {
-                    CFNumberRef idNum = (CFNumberRef)CFDictionaryGetValue(spaceDict, CFSTR("id64"));
-                    if (idNum && CFGetTypeID(idNum) == CFNumberGetTypeID()) {
-                        CFNumberGetValue(idNum, kCFNumberSInt64Type, &result);
-                    }
-                }
-                goto done;
-            }
-            idx++;
-        }
-    }
-done:
-    CFRelease(displays);
-    return result;
-}
+    AXValueRef posVal = NULL;
+    AXValueRef sizeVal = NULL;
+    err = AXUIElementCopyAttributeValue(focusedWindow, kAXPositionAttribute, (CFTypeRef *)&posVal);
+    if (err != kAXErrorSuccess || !posVal) { CFRelease(focusedWindow); return false; }
+    err = AXUIElementCopyAttributeValue(focusedWindow, kAXSizeAttribute, (CFTypeRef *)&sizeVal);
+    if (err != kAXErrorSuccess || !sizeVal) { CFRelease(posVal); CFRelease(focusedWindow); return false; }
 
-static uint32_t get_frontmost_window_id(void) {
-    CFArrayRef windowList = CGWindowListCopyWindowInfo(
-        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
-        kCGNullWindowID);
-    if (!windowList) return 0;
+    CGPoint pos = {0, 0};
+    CGSize size = {0, 0};
+    AXValueGetValue(posVal, kAXValueCGPointType, &pos);
+    AXValueGetValue(sizeVal, kAXValueCGSizeType, &size);
+    CFRelease(posVal);
+    CFRelease(sizeVal);
+    CFRelease(focusedWindow);
 
-    uint32_t result = 0;
-    CFIndex count = CFArrayGetCount(windowList);
-    for (CFIndex i = 0; i < count; i++) {
-        CFDictionaryRef info = (CFDictionaryRef)CFArrayGetValueAtIndex(windowList, i);
-        if (!info) continue;
+    if (size.width <= 0 || size.height <= 0) return false;
 
-        CFNumberRef layerNum = (CFNumberRef)CFDictionaryGetValue(info, CFSTR("kCGWindowLayer"));
-        if (!layerNum) continue;
-        int layer = 0;
-        CFNumberGetValue(layerNum, kCFNumberIntType, &layer);
-        if (layer != 0) continue;
-
-        CFStringRef owner = (CFStringRef)CFDictionaryGetValue(info, CFSTR("kCGWindowOwnerName"));
-        if (!owner) continue;
-        if (CFEqual(owner, CFSTR("Dock")) || CFEqual(owner, CFSTR("WindowServer")) ||
-            CFEqual(owner, CFSTR("SystemUIServer")) || CFEqual(owner, CFSTR("Control Center"))) {
-            continue;
-        }
-
-        CFNumberRef windowIDNum = (CFNumberRef)CFDictionaryGetValue(info, CFSTR("kCGWindowNumber"));
-        if (windowIDNum) {
-            uint32_t windowID = 0;
-            CFNumberGetValue(windowIDNum, kCFNumberIntType, &windowID);
-            if (windowID != 0) {
-                result = windowID;
-                break;
-            }
-        }
-    }
-
-    CFRelease(windowList);
-    return result;
+    // Title bar: midpoint along x, a few pixels down from the top. Avoids the
+    // traffic-light buttons on the left and any tab strip below.
+    outPoint->x = pos.x + size.width / 2.0;
+    outPoint->y = pos.y + 12;
+    return true;
 }
 
 bool iss_move_frontmost_window_to_index(unsigned int targetIndex) {
-    if (&CGSMoveWindowsToManagedSpace == NULL) return false;
     if (!cgs_symbols_available()) return false;
 
-    CGSConnectionID connection = CGSMainConnectionID();
-    if (connection == 0) return false;
+    ISSSpaceInfo info;
+    if (!iss_get_space_info(&info)) return false;
+    if (targetIndex >= info.spaceCount) return false;
+    if (info.currentIndex == targetIndex) return true;
 
-    uint32_t windowID = get_frontmost_window_id();
-    if (windowID == 0) return false;
+    CGPoint grabPoint;
+    if (!get_focused_window_grab_point(&grabPoint)) {
+        fprintf(stderr, "[ISS] move: no focused window via AX\n");
+        return false;
+    }
 
-    CGSSpaceID spaceID = get_space_id_for_index(connection, targetIndex);
-    if (spaceID == 0) return false;
+    // Save the user's cursor so we can put it back after the synthetic drag.
+    CGPoint savedCursor = grabPoint;
+    CGEventRef stateEvent = CGEventCreate(NULL);
+    if (stateEvent) {
+        savedCursor = CGEventGetLocation(stateEvent);
+        CFRelease(stateEvent);
+    }
 
-    CFNumberRef windowIDNum = CFNumberCreate(NULL, kCFNumberSInt32Type, &windowID);
-    if (!windowIDNum) return false;
+    // Mouse-down on the title bar. Clear modifier flags so the hotkey's
+    // modifiers (cmd/opt/shift/ctrl) don't turn this into a modified click.
+    CGEventRef down = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDown,
+                                              grabPoint, kCGMouseButtonLeft);
+    if (!down) return false;
+    CGEventSetFlags(down, 0);
+    CGEventPost(kCGHIDEventTap, down);
+    CFRelease(down);
 
-    CFArrayRef windows = CFArrayCreate(NULL, (const void **)&windowIDNum, 1, &kCFTypeArrayCallBacks);
-    CFRelease(windowIDNum);
-    if (!windows) return false;
+    // Small pause so WindowServer registers the grab before we swipe.
+    usleep(5000);
 
-    CGSMoveWindowsToManagedSpace(connection, windows, spaceID);
-    CFRelease(windows);
-    return true;
+    // Existing instant space switch. The held window should ride along.
+    bool switched = iss_switch_to_index(targetIndex);
+
+    // Mouse-up to drop the window on whatever space we ended up on.
+    CGEventRef up = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp,
+                                            grabPoint, kCGMouseButtonLeft);
+    if (up) {
+        CGEventSetFlags(up, 0);
+        CGEventPost(kCGHIDEventTap, up);
+        CFRelease(up);
+    }
+
+    CGWarpMouseCursorPosition(savedCursor);
+    return switched;
 }
 
 void iss_set_swipe_override(bool enabled) {
